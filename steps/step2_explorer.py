@@ -1,20 +1,14 @@
 """
 Step 2 — Chain Explorer Agent
-Finds a chain of HOP_COUNT atomic, sourced relations starting from entity A:
-A -> B -> C -> ... (HOP_COUNT hops, HOP_COUNT + 1 entities total).
-
-Diversity fixes (entity + hop dedup, real DFS backtracking) - see previous
-version's docstring for details, unchanged here.
-
-NEW: source-URL independence fix. Step 3 was correctly rejecting chains
-where two different hops pulled their evidence from the SAME source page -
-that's a genuine hop-independence violation (a single search could partly
-solve the question). That was never checked at generation time, so Step 2
-could - and did - happily build a chain that Step 3 would always reject.
-Fixed by tracking every source_url already used earlier in the SAME chain
-and rejecting any candidate hop that reuses one, at generation time, before
-the chain is ever assembled - same exclude-and-retry pattern as entity dedup.
-Output: data/step2_chains.json
+...
+NEW: salience-aware hop selection. Step 3 was catching too-famous bridge
+entities only AFTER a whole chain was built, wasting generation effort on
+chains that were doomed from one bad hop. Research on multihop difficulty
+(semantic distance between evidence is a stronger difficulty predictor than
+hop count itself) points to fixing THIS, not just adding more hops. Fixed by
+asking the model to self-rate each candidate's fame/salience as part of its
+JSON output, and rejecting "high" salience candidates at generation time -
+same exclude-and-retry mechanism already used for duplicates and source reuse.
 """
 import os
 from config import (
@@ -130,12 +124,20 @@ Hard requirements:
   and itself likely to have further documented relations.
 - Prefer a relation type of: {relation_type}, but only if the evidence supports it.
 
+IMPORTANT - prefer LESS FAMOUS candidates: when the evidence supports more
+than one possible next entity, prefer the one a well-informed person would
+be LESS likely to already know, over a globally famous "household name" -
+this makes the resulting question genuinely hard to find rather than
+trivially guessable. Also self-rate how famous/recognizable the next entity
+you picked actually is.
+
 Return ONLY JSON:
 {{
   "found": true,
   "relation": "<short relation phrase, e.g. 'appointed head coach of'>",
   "next_entity": "<name>",
   "next_entity_type": "<person|organization|place|event|work>",
+  "next_entity_salience": "low"|"medium"|"high",
   "source_url": "<url>",
   "supporting_sentence": "<exact sentence from the source that states the relation>",
   "confidence": "explicit_statement"
@@ -145,21 +147,14 @@ If nothing usable is found for this relation type, return:
 """
 
 
-def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_urls: set = None) -> dict:
-    """
-    Try up to MAX_RELATION_ATTEMPTS_PER_HOP relation types before declaring
-    dead end.
-    `exclude` - normalized next_entity names already tried/rejected at THIS
-    hop position (dedup + real backtracking, from the previous fix).
-    `exclude_source_urls` - source URLs already used by EARLIER hops in this
-    SAME chain - a candidate reusing one is rejected, since two hops sharing
-    a source is exactly the "hop independence violated" failure Step 3 flags.
-    """
+def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_urls: set = None,
+                  previous_relation: str = None) -> dict:
     exclude = exclude or set()
     exclude_source_urls = exclude_source_urls or set()
-    exclude_hint = list(exclude)[:DIVERSITY_HINT_SAMPLE_SIZE]  # fixed size, never grows prompt
+    exclude_hint = list(exclude)[:DIVERSITY_HINT_SAMPLE_SIZE]
 
     relation_types = RELATION_TYPES_BY_DOMAIN.get(domain, RELATION_TYPES_BY_DOMAIN["Other"])
+    rejected_for_salience = []  # collected for the final failure reason, useful for debugging
 
     for attempt, rel_type in enumerate(relation_types[:MAX_RELATION_ATTEMPTS_PER_HOP]):
         search_relation = rel_type.replace("_", " ")
@@ -170,10 +165,17 @@ def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_u
             usable_results = [r for r in results if "error" not in r]
         if not usable_results:
             continue
+
         user_prompt = f"Source entity: {entity}\n\nSearch results:\n" + "\n\n".join(
             f"[{i}] {r.get('title')} ({r.get('url')})\n{r.get('content','')[:500]}"
-            for i, r in enumerate(results) if "error" not in r
+            for i, r in enumerate(usable_results)
         )
+        if previous_relation:
+            user_prompt += (
+                f"\n\nThe chain so far reached this entity via: \"{previous_relation}\". "
+                "Where the evidence supports it, PREFER a next relation that continues "
+                "this same theme or storyline, rather than an unrelated fact about this entity."
+            )
         if exclude_hint:
             user_prompt += (
                 "\n\nDo NOT propose any of these as the next entity - already "
@@ -182,8 +184,7 @@ def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_u
         if exclude_source_urls:
             user_prompt += (
                 "\n\nDo NOT use any of these source URLs - already used earlier "
-                f"in this chain, so reusing one breaks source independence: "
-                f"{', '.join(list(exclude_source_urls)[:DIVERSITY_HINT_SAMPLE_SIZE])}. "
+                f"in this chain: {', '.join(list(exclude_source_urls)[:DIVERSITY_HINT_SAMPLE_SIZE])}. "
                 "Find a DIFFERENT source for this hop."
             )
 
@@ -199,15 +200,26 @@ def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_u
         if out.get("found"):
             candidate_norm = out["next_entity"].strip().lower()
             candidate_url = (out.get("source_url") or "").strip()
+            candidate_salience = out.get("next_entity_salience", "medium")
+
             if candidate_norm in exclude:
-                continue  # duplicate entity - reject, try next relation type
+                continue
             if candidate_url and candidate_url in exclude_source_urls:
-                continue  # reused source from an earlier hop - reject, try next relation type
+                continue
+            if candidate_salience == "high":
+                # NEW: reject too-famous candidates HERE, before the chain is
+                # ever built, rather than discovering it after the fact in Step 3
+                rejected_for_salience.append(out["next_entity"])
+                continue
+
             out["relation_type_used"] = rel_type
             out["attempts_used"] = attempt + 1
             return out
-    return {"found": False, "reason": "exhausted relation types (including exclusions)",
-            "attempts_used": MAX_RELATION_ATTEMPTS_PER_HOP}
+
+    reason = "exhausted relation types (including exclusions)"
+    if rejected_for_salience:
+        reason += f" - rejected for high salience: {', '.join(rejected_for_salience)}"
+    return {"found": False, "reason": reason, "attempts_used": MAX_RELATION_ATTEMPTS_PER_HOP}
 
 
 def _build_chain(entity_A: str, domain: str):
@@ -231,8 +243,10 @@ def _build_chain(entity_A: str, domain: str):
         current_entity = entities[hop_idx]
         # source URLs already locked in by earlier, currently-accepted hops in this chain
         used_source_urls = {h["source_url"] for h in hops[:hop_idx] if h and h.get("source_url")}
-
-        hop = _explore_hop(current_entity, domain=domain, exclude=excludes[hop_idx], exclude_source_urls=used_source_urls)
+        whole_chain_entities = {e.strip().lower() for e in entities[:hop_idx + 1]}
+        combined_exclude = excludes[hop_idx] | whole_chain_entities
+        previous_relation = hops[hop_idx - 1]["relation"] if hop_idx > 0 and hops[hop_idx - 1] else None
+        hop = _explore_hop(current_entity, domain=domain, exclude=combined_exclude, exclude_source_urls=used_source_urls, previous_relation=previous_relation)
 
         if not hop.get("found"):
             excludes[hop_idx] = set()  # reset in case we reach this depth again via a different earlier branch
