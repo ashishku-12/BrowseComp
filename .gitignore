@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Data directories
+data/
+data1/
+data2/
+data3/
+data4/
+
+# Environment variables
+.env
+
+# Virtual environment
+venv/
