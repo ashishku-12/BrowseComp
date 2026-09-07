@@ -14,38 +14,59 @@ from utils.llm_client import call_llm
 INPUT_PATH = os.path.join(DATA_DIR, "step2_chains.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step3_filtered.json")
 
-SYSTEM_PROMPT = """You are a Filtering Agent for a multihop question dataset.
-Given a chain of entities connected by a sequence of relations, with one
-source sentence per hop, evaluate:
+SYSTEM_PROMPT = """You are an evidence verification agent for a multihop
+question-answering dataset.
 
-1. Bridge entity salience: for each INTERMEDIATE entity (every entity except
-   the first and the final answer), is it a globally famous / "household name"
-   entity? Only a TRULY famous, front-page-recognizable entity should count
-   as "high" salience and cause a FAIL - a moderately well-known professional,
-   local official, or niche-but-documented organization is "low" or "medium"
-   and should NOT fail on salience alone.
-2. Source credibility: is every hop's source reasonably reputable (official
-   sites, established news, institutional pages, verifiable databases)
-   rather than low-quality (forums, unsourced wikis, content farms, spam)?
-   "medium" credibility sources are acceptable and should not by themselves
-   cause a FAIL - only "low" credibility sources should.
-3. Hop independence: do the source URLs differ across ALL hops, and does no
-   single source already state multiple hops of the connection together?
+Your ONLY job is to verify whether each hop is explicitly supported by the
+provided supporting sentence.
 
-This chain has exactly {n_hops} hops and {n_bridges} intermediate (bridge)
-entities. Your response arrays MUST have EXACTLY these lengths:
-- "source_credibility": exactly {n_hops} entries, one per hop, in order.
-- "bridge_entity_salience": exactly {n_bridges} entries, one per intermediate
-  entity, in order (empty list [] if there are zero intermediate entities).
+Do NOT use your own world knowledge to fill missing information.
+Do NOT assume a relationship is true because it sounds plausible.
+Do NOT infer a relationship from context.
+Do NOT judge whether an entity is famous unless the supplied evidence directly
+supports that judgment.
+
+For EACH hop, verify:
+
+1. ENTITY MATCH:
+   Does the supporting sentence explicitly mention or unambiguously identify
+   both the source entity and the next entity?
+
+2. RELATION MATCH:
+   Does the supporting sentence explicitly state the claimed relationship
+   between those two entities?
+
+3. NO INFERENCE:
+   Would accepting this hop require adding information that is not explicitly
+   stated in the sentence?
+
+A hop is valid ONLY when the relationship is explicitly supported by the
+provided sentence.
+
+If you cannot establish the relationship from the supplied sentence alone,
+mark that hop as unsupported.
+
+The source URL is metadata only. Do not assume that a URL is credible merely
+because its domain looks familiar.
 
 Return ONLY JSON:
-{{
+
+{
   "verdict": "pass" | "fail",
-  "bridge_entity_salience": ["low"|"medium"|"high", ...],
-  "source_credibility": ["high"|"medium"|"low", ...],
-  "hop_independence": "confirmed" | "violated",
-  "notes": "<short explanation, especially if failing>"
-}}
+  "hop_verification": [
+    {
+      "hop": 1,
+      "entity_match": "yes" | "no",
+      "relation_match": "yes" | "no",
+      "requires_inference": "yes" | "no",
+      "verdict": "supported" | "unsupported",
+      "reason": "<short evidence-based explanation>"
+    }
+  ],
+  "notes": "<short explanation>"
+}
+
+There must be exactly one hop_verification entry per hop.
 """
 
 
@@ -90,24 +111,28 @@ def run() -> None:
                 f"  source: {hop['source_url']}\n"
                 f"  sentence: {hop['supporting_sentence']}"
             )
-        user_prompt = "Chain:\n" + "\n".join(chain_desc_lines)
+        user_prompt = (
+            "Verify the following chain using ONLY the supplied supporting sentences.\n"
+            "Do not use outside knowledge.\n\n"
+            + "\n".join(chain_desc_lines)
+        )
 
         try:
             verdict = call_llm(
-                SYSTEM_PROMPT.format(n_hops=n_hops, n_bridges=n_bridges),
+                SYSTEM_PROMPT,
                 user_prompt, model=DEEPSEEK_MODEL_CHEAP, use_secondary=True,
             )
         except Exception as e:
             verdict = {"verdict": "fail", "notes": f"filter agent error: {e}"}
 
-        # Defensive check - flag (don't force-fail) array-length mismatches so
-        # they're visible in the data instead of silently trusted
-        sal = verdict.get("bridge_entity_salience", [])
-        cred = verdict.get("source_credibility", [])
-        if len(sal) != n_bridges or len(cred) != n_hops:
+        # Defensive check - flag hop verification array-length mismatches
+        # so they're visible in the data instead of silently trusted
+        hop_verification = verdict.get("hop_verification", [])
+
+        if len(hop_verification) != n_hops:
             verdict["length_mismatch_warning"] = (
-                f"expected {n_bridges} salience / {n_hops} credibility entries, "
-                f"got {len(sal)} / {len(cred)}"
+                f"expected {n_hops} hop verification entries, "
+                f"got {len(hop_verification)}"
             )
 
         record = {**chain, "filter": verdict}

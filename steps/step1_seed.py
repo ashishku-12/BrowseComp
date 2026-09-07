@@ -14,7 +14,7 @@ identical seeds. Fixed with three layers, all domain-agnostic:
      candidates instead of regenerating the same "most likely" answer.
 """
 import os
-from config import DATA_DIR, DEEPSEEK_MODEL_CHEAP, DIVERSITY_HINT_SAMPLE_SIZE, MAX_DEDUP_RETRIES
+from config import DATA_DIR, DEEPSEEK_MODEL_CHEAP, DIVERSITY_HINT_SAMPLE_SIZE, MAX_DEDUP_RETRIES, START_DATE, END_DATE
 from utils.io_utils import ResumableWriter
 from utils.llm_client import call_llm
 from utils.search_client import search
@@ -117,12 +117,16 @@ def run(domains: list, n_per_domain: int = 3) -> None:
             record = None
             for attempt in range(MAX_DEDUP_RETRIES + 1):
                 exclude_hint = used_list[-DIVERSITY_HINT_SAMPLE_SIZE:]  # fixed size, never grows prompt
-                results = search(f"{domain_hint} notable {target_type} 2026")
+                results = search(
+                    f"What {target_type} related to {primary_domain}-{subdomain} can be identified in 2026?",
+                    start_date=START_DATE,
+                    end_date=END_DATE
+                )
                 # print(results)
                 try:
                     out = call_llm(
                         SYSTEM_PROMPT,
-                        _build_user_prompt(domain_hint, results, exclude_hint, target_type),
+                        _build_user_prompt(primary_domain+"-"+subdomain, results, exclude_hint, target_type),
                         model=DEEPSEEK_MODEL_CHEAP, use_secondary=True, sample=True,
                     )
                 except Exception as e:

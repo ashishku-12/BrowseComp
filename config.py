@@ -13,19 +13,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL_CHEAP = os.environ.get("DEEPSEEK_MODEL_CHEAP", "deepseek-v4-flash")   # was "deepseek-chat"
 DEEPSEEK_MODEL_STRONG = os.environ.get("DEEPSEEK_MODEL_STRONG", "deepseek-v4-pro")   # was "deepseek-reasoner"
 
-# --- Secondary model for Steps 5 & 6a (redundancy check + blind-solve check) ---
-# FREE, no billing: runs locally instead of calling a paid API, so these two
-# steps - which specifically need a model from a DIFFERENT family than
-# DeepSeek to avoid shared blind spots - cost nothing beyond your own GPU.
-#
-# Default: Qwen2.5-14B-Instruct, 4-bit quantized (~9GB VRAM, fits a 12GB card).
-# Ungated on Hugging Face (no license request needed), Apache 2.0 license.
-#
-# Alternative if you prefer Meta's family or want a smaller footprint:
-#   "meta-llama/Llama-3.1-8B-Instruct"  (~5-6GB in 4-bit)
-#   Note: Llama repos are gated - you must accept Meta's license on the
-#   model's Hugging Face page and run `huggingface-cli login` once before
-#   first download. Still free, just an extra one-time step.
+
 LOCAL_MODEL_ID = os.environ.get("LOCAL_MODEL_ID", "Qwen/Qwen2.5-7B-Instruct")
 LOCAL_MODEL_4BIT = True                 # keep True to fit 12GB VRAM
 LOCAL_MODEL_MAX_NEW_TOKENS = 1024
@@ -36,7 +24,8 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 # --- Pipeline tunables ---
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-RECENCY_START_DATE = os.environ.get("RECENCY_START_DATE", "2026-01-01")
+START_DATE = os.environ.get("RECENCY_START_DATE", "2026-05-01")
+END_DATE = os.environ.get("RECENCY_END_DATE", "2026-12-01")
 
 MAX_RELATION_ATTEMPTS_PER_HOP = 6   # step 2: retry different relation types before dead-end
 MAX_BACKTRACKS_PER_CHAIN = 6        # step 2: try alternate B candidates

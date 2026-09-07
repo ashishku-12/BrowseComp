@@ -15,6 +15,13 @@ export DEEPSEEK_API_KEY="..."
 export TAVILY_API_KEY="..."
 ```
 
+The requirements file uses the PyTorch CUDA 12.8 wheel index. If this virtual
+environment already has the CPU-only build installed, reinstall PyTorch with:
+```bash
+python -m pip uninstall -y torch
+python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+```
+
 Steps 5 and 6a use a **local, free, no-billing** secondary model
 (Qwen2.5-14B-Instruct, 4-bit quantized, ~9GB VRAM - fits a 12GB card) instead
 of a paid API, so the two steps that specifically need a different model

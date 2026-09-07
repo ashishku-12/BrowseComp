@@ -1,6 +1,6 @@
 """
 Step 2 — Chain Explorer Agent
-...
+
 NEW: salience-aware hop selection. Step 3 was catching too-famous bridge
 entities only AFTER a whole chain was built, wasting generation effort on
 chains that were doomed from one bad hop. Research on multihop difficulty
@@ -13,11 +13,12 @@ same exclude-and-retry mechanism already used for duplicates and source reuse.
 import os
 from config import (
     DATA_DIR, DEEPSEEK_MODEL_STRONG, HOP_COUNT,
-    MAX_RELATION_ATTEMPTS_PER_HOP, MAX_BACKTRACKS_PER_CHAIN, DIVERSITY_HINT_SAMPLE_SIZE, RECENCY_START_DATE
+    MAX_RELATION_ATTEMPTS_PER_HOP, MAX_BACKTRACKS_PER_CHAIN, DIVERSITY_HINT_SAMPLE_SIZE, START_DATE, END_DATE
 )
 from utils.io_utils import ResumableWriter, load_json_list
 from utils.llm_client import call_llm
 from utils.search_client import search
+import random
 
 INPUT_PATH = os.path.join(DATA_DIR, "step1_seeds.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step2_chains.json")
@@ -131,12 +132,18 @@ this makes the resulting question genuinely hard to find rather than
 trivially guessable. Also self-rate how famous/recognizable the next entity
 you picked actually is.
 
+IMPORTANT - evidence grounding:
+- next_entity must be explicitly present in the provided search evidence; never invent or infer an entity.
+- The relationship between the source entity and next_entity must be explicitly stated in the evidence; never infer a relationship.
+- supporting_sentence must be copied exactly from the source evidence; never fabricate, paraphrase, or reconstruct it.
+
+
 Return ONLY JSON:
 {{
   "found": true,
   "relation": "<short relation phrase, e.g. 'appointed head coach of'>",
   "next_entity": "<name>",
-  "next_entity_type": "<person|organization|place|event|work>",
+  "next_entity_type": "<>",
   "next_entity_salience": "low"|"medium"|"high",
   "source_url": "<url>",
   "supporting_sentence": "<exact sentence from the source that states the relation>",
@@ -154,72 +161,73 @@ def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_u
     exclude_hint = list(exclude)[:DIVERSITY_HINT_SAMPLE_SIZE]
 
     relation_types = RELATION_TYPES_BY_DOMAIN.get(domain, RELATION_TYPES_BY_DOMAIN["Other"])
-    rejected_for_salience = []  # collected for the final failure reason, useful for debugging
+    rel_type = random.choice(relation_types)  # ONE random category per call - no loop
+    search_relation = rel_type.replace("_", " ")
 
-    for attempt, rel_type in enumerate(relation_types[:MAX_RELATION_ATTEMPTS_PER_HOP]):
-        search_relation = rel_type.replace("_", " ")
-        results = search(f"{entity} {search_relation} relation OR role OR connection", start_date=RECENCY_START_DATE)
-        usable_results = [r for r in results if "error" not in r]
-        if not usable_results:
-            results = search(f"{entity} {search_relation} relation OR role OR connection")
-            usable_results = [r for r in results if "error" not in r]
-        if not usable_results:
-            continue
+    results = search(
+        f"What connection, role, relationship, or association involving "
+        f"{entity} can be found through {search_relation} in 2026?",
+        start_date=START_DATE,
+        end_date=END_DATE
+    )
 
-        user_prompt = f"Source entity: {entity}\n\nSearch results:\n" + "\n\n".join(
-            f"[{i}] {r.get('title')} ({r.get('url')})\n{r.get('content','')[:500]}"
-            for i, r in enumerate(usable_results)
+    usable_results = [r for r in results if "error" not in r]
+    if not usable_results:
+        results = search(
+            f"What connection, role, relationship, or association involving "
+            f"{entity} can be found through {search_relation} in 2026?"
         )
-        if previous_relation:
-            user_prompt += (
-                f"\n\nThe chain so far reached this entity via: \"{previous_relation}\". "
-                "Where the evidence supports it, PREFER a next relation that continues "
-                "this same theme or storyline, rather than an unrelated fact about this entity."
-            )
-        if exclude_hint:
-            user_prompt += (
-                "\n\nDo NOT propose any of these as the next entity - already "
-                f"tried at this step: {', '.join(exclude_hint)}. Pick a different one."
-            )
-        if exclude_source_urls:
-            user_prompt += (
-                "\n\nDo NOT use any of these source URLs - already used earlier "
-                f"in this chain: {', '.join(list(exclude_source_urls)[:DIVERSITY_HINT_SAMPLE_SIZE])}. "
-                "Find a DIFFERENT source for this hop."
-            )
+        usable_results = [r for r in results if "error" not in r]
+    if not usable_results:
+        return {"found": False, "reason": f"no usable search results for relation type '{rel_type}'"}
 
-        try:
-            out = call_llm(
-                SYSTEM_PROMPT.format(relation_type=rel_type),
-                user_prompt,
-                model=DEEPSEEK_MODEL_STRONG, use_secondary=True, sample=True,
-            )
-        except Exception as e:
-            out = {"found": False, "reason": str(e)}
+    user_prompt = f"Source entity: {entity}\n\nSearch results:\n" + "\n\n".join(
+        f"[{i}] {r.get('title')} ({r.get('url')})\n{r.get('content','')[:700]}"
+        for i, r in enumerate(usable_results)
+    )
+    if previous_relation:
+        user_prompt += (
+            f"\n\nThe chain so far reached this entity via: \"{previous_relation}\". "
+            "Where the evidence supports it, PREFER a next relation that continues "
+            "this same theme or storyline, rather than an unrelated fact about this entity."
+        )
+    if exclude_hint:
+        user_prompt += (
+            "\n\nDo NOT propose any of these as the next entity - already "
+            f"tried at this step: {', '.join(exclude_hint)}. Pick a different one."
+        )
+    if exclude_source_urls:
+        user_prompt += (
+            "\n\nDo NOT use any of these source URLs - already used earlier "
+            f"in this chain: {', '.join(list(exclude_source_urls)[:DIVERSITY_HINT_SAMPLE_SIZE])}. "
+            "Find a DIFFERENT source for this hop."
+        )
 
-        if out.get("found"):
-            candidate_norm = out["next_entity"].strip().lower()
-            candidate_url = (out.get("source_url") or "").strip()
-            candidate_salience = out.get("next_entity_salience", "medium")
+    try:
+        out = call_llm(
+            SYSTEM_PROMPT.format(relation_type=rel_type),
+            user_prompt,
+            model=DEEPSEEK_MODEL_STRONG, use_secondary=True, sample=True,
+        )
+    except Exception as e:
+        out = {"found": False, "reason": str(e)}
 
-            if candidate_norm in exclude:
-                continue
-            if candidate_url and candidate_url in exclude_source_urls:
-                continue
-            if candidate_salience == "high":
-                # NEW: reject too-famous candidates HERE, before the chain is
-                # ever built, rather than discovering it after the fact in Step 3
-                rejected_for_salience.append(out["next_entity"])
-                continue
+    if out.get("found"):
+        candidate_norm = out["next_entity"].strip().lower()
+        candidate_url = (out.get("source_url") or "").strip()
+        candidate_salience = out.get("next_entity_salience", "medium")
 
-            out["relation_type_used"] = rel_type
-            out["attempts_used"] = attempt + 1
-            return out
+        if candidate_norm in exclude:
+            return {"found": False, "reason": f"'{out['next_entity']}' already tried/excluded"}
+        if candidate_url and candidate_url in exclude_source_urls:
+            return {"found": False, "reason": "source URL already used earlier in this chain"}
+        if candidate_salience == "high":
+            return {"found": False, "reason": f"'{out['next_entity']}' rejected for high salience"}
 
-    reason = "exhausted relation types (including exclusions)"
-    if rejected_for_salience:
-        reason += f" - rejected for high salience: {', '.join(rejected_for_salience)}"
-    return {"found": False, "reason": reason, "attempts_used": MAX_RELATION_ATTEMPTS_PER_HOP}
+        out["relation_type_used"] = rel_type
+        return out
+
+    return out  # already shaped {"found": False, "reason": ...} from the model
 
 
 def _build_chain(entity_A: str, domain: str):
