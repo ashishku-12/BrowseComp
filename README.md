@@ -62,12 +62,11 @@ This means:
 The usable dataset is every record in `step6_verified.json` where
 `verification.final_verdict == "accept"`.
 
-## Model assignment (why each step uses what)
+## Model Used 
 
-| Step | Model |
-|---|---|
-| 1 Seed, 2 Explorer, 3 Filter, 4 Constructor, 6b Evidence re-derivation | Local Qwen2.5-14B-Instruct (4-bit) |
-| 5 Redundancy/shortcut check, 6 Blind-solve check | Local Qwen2.5-14B-Instruct (4-bit) |
+```bash
+Local Qwen2.5-14B-Instruct (4-bit)
+```
 
 
 ## Tuning knobs
