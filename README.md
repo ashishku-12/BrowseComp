@@ -57,26 +57,22 @@ This means:
 | `step3_filtered.json` | Filtering Agent | Chains + pass/fail salience & credibility verdict |
 | `step4_questions.json` | Question Constructor | Obfuscated question + canonical answer |
 | `step5_graphchecked.json` | Redundancy Check | + reasoning graph, shortcut/redundancy verdict |
-| `step6_verified.json` | Verifier | **Final file** - + blind-solve & evidence checks, `final_verdict` |
+| `step6_verified.json` | Verifier | **Final file** - + blind-solve, `final_verdict` |
 
 The usable dataset is every record in `step6_verified.json` where
 `verification.final_verdict == "accept"`.
 
 ## Model assignment (why each step uses what)
 
-| Step | Model | Cost |
+| Step | Model |
 |---|---|---|
-| 1 Seed, 2 Explorer, 3 Filter, 4 Constructor, 6b Evidence re-derivation | DeepSeek API (`deepseek-chat`/`deepseek-reasoner`) | Paid, usage-based |
-| 5 Redundancy/shortcut check, 6a Blind-solve check | Local Qwen2.5-14B-Instruct (4-bit) | **Free** - your GPU only |
+| 1 Seed, 2 Explorer, 3 Filter, 4 Constructor, 6b Evidence re-derivation | Local Qwen2.5-14B-Instruct (4-bit) |
+| 5 Redundancy/shortcut check, 6 Blind-solve check | Local Qwen2.5-14B-Instruct (4-bit) |
 
-Steps 5 and 6a are the two quality gates most likely to let an accidentally-easy
-question through, so they deliberately use a model from a different family
-than DeepSeek - running it locally means that safeguard costs nothing extra.
 
 ## Tuning knobs
 
 See `config.py`:
 - `MAX_RELATION_ATTEMPTS_PER_HOP` / `MAX_BACKTRACKS_PER_CHAIN` - dead-end retry budget in Step 2.
 - `LOW_CREDIBILITY_DOMAINS` - quick pre-filter list used in Step 3 before the LLM call.
-- `DEEPSEEK_MODEL_CHEAP` vs `DEEPSEEK_MODEL_STRONG` - which steps use the lighter vs. stronger DeepSeek tier.
 - `LOCAL_MODEL_ID` / `LOCAL_MODEL_4BIT` - which local model backs Steps 5 & 6a, and whether to quantize it.
