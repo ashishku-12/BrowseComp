@@ -12,7 +12,7 @@ filter on final_verdict == "accept" for the usable dataset)
 import os
 from config import DATA_DIR
 from utils.io_utils import ResumableWriter, load_json_list
-from utils.llm_client import call_llm, call_llm_no_tools_text
+from utils.local_llm_client import call_local_llm, call_local_llm_text
 
 INPUT_PATH = os.path.join(DATA_DIR, "step5_graphchecked.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step6_verified.json")
@@ -24,22 +24,15 @@ different date formats). Do NOT require an exact string match - judge whether
 a knowledgeable person would consider them the same answer.
 Return ONLY JSON: {"match": true|false}."""
 
-REDERIVE_SYSTEM_PROMPT = """You are given a multihop chain's evidence, hop by hop,
-WITH the entity and relation for each hop, plus the sentence supporting it
-(no web access, no outside knowledge should be needed beyond this evidence),
-and a question. Walk the chain in order - each hop's "to" entity is the next
-hop's "from" entity - and derive the final answer.
-Return ONLY JSON: {"derived_answer": "<answer or null if not derivable from the evidence given>"}."""
 
 
 def _answers_match(candidate: str, canonical: str) -> bool:
     if not candidate:
         return False
     try:
-        out = call_llm(
+        out = call_local_llm(
             MATCH_SYSTEM_PROMPT,
-            f"Canonical answer: {canonical}\nCandidate answer: {candidate}",
-            use_secondary=True,
+            f"Canonical answer: {canonical}\nCandidate answer: {candidate}"
         )
         return bool(out.get("match"))
     except Exception:
@@ -64,46 +57,21 @@ def run() -> None:
 
         # 6a: blind-solve check (no tools, no search) - local model, no evidence given at all
         try:
-            blind_answer = call_llm_no_tools_text(question, use_secondary=True)
+            blind_answer = call_local_llm_text(question)
             blind_solved = _answers_match(blind_answer, canonical)
         except Exception as e:
             blind_answer, blind_solved = f"[error: {e}]", False  # fail-open to manual review, not auto-accept
-
-        # 6b: evidence-only re-derivation - NOW includes entity/relation structure
-        # per hop, matching what Steps 3 and 5 already give the model, instead of
-        # forcing cold entity-resolution across bare sentences with no scaffolding.
-        # evidence_lines = []
-        # for i, hop in enumerate(hops):
-        #     evidence_lines.append(
-        #         f"Hop {i+1}: {entities[i]} --[{hop['relation']}]--> {entities[i+1]}\n"
-        #         f"  Evidence: {hop['supporting_sentence']}"
-        #     )
-        # evidence_text = "\n".join(evidence_lines)
-
-        # try:
-        #     rederive = call_llm(
-        #         REDERIVE_SYSTEM_PROMPT,
-        #         f"Question: {question}\n\n{evidence_text}",
-        #         use_secondary=True,
-        #     )
-        #     evidence_ok = _answers_match(rederive.get("derived_answer"), canonical)
-        # except Exception as e:
-        #     rederive, evidence_ok = {"derived_answer": None, "error": str(e)}, False
 
         final_verdict = "accept" if (not blind_solved) else "reject"
         reason = []
         if blind_solved:
             reason.append("blind-solved from parametric memory (contamination risk)")
-        # if not evidence_ok:
-        #     reason.append("could not be re-derived from cited evidence alone")
 
         record = {
             **item,
             "verification": {
                 "blind_solve_answer": blind_answer,
                 "blind_solve_correct": blind_solved,
-                # "evidence_rederivation": rederive,
-                # "evidence_rederivation_correct": evidence_ok,
                 "final_verdict": final_verdict,
                 "reason": "; ".join(reason) if reason else "passed check",
             },

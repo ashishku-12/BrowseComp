@@ -1,8 +1,8 @@
 # Multihop BrowseComp-style Dataset Pipeline
 
 Generates hard-to-find, easy-to-verify multihop questions of the form
-`A -> B -> C`, following the EvoBrowseComp-style methodology discussed:
-seed an entity, discover two independently-sourced hops, filter out
+`A -> B -> C -> D`, following the BrowseComp-style dataset:
+seed an entity, discover independently-sourced hops, filter out
 parametric-shortcut risk, construct an obfuscated backward-built question,
 check the reasoning graph for shortcuts/redundancy, and verify with a
 blind-solve contamination check plus an evidence-only re-derivation check.
@@ -11,8 +11,6 @@ blind-solve contamination check plus an evidence-only re-derivation check.
 
 ```bash
 pip install -r requirements.txt
-export DEEPSEEK_API_KEY="..."
-export TAVILY_API_KEY="..."
 ```
 
 The requirements file uses the PyTorch CUDA 12.8 wheel index. If this virtual
@@ -21,23 +19,6 @@ environment already has the CPU-only build installed, reinstall PyTorch with:
 python -m pip uninstall -y torch
 python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 ```
-
-Steps 5 and 6a use a **local, free, no-billing** secondary model
-(Qwen2.5-14B-Instruct, 4-bit quantized, ~9GB VRAM - fits a 12GB card) instead
-of a paid API, so the two steps that specifically need a different model
-family from DeepSeek don't cost anything extra. No API key needed for this -
-it downloads once from Hugging Face (ungated, no license approval required)
-and runs locally from then on. First run will be slow while it downloads
-(~9GB) and loads; subsequent runs reuse the cached weights.
-
-Prefer Meta's family or need a smaller footprint instead? Set:
-```bash
-export LOCAL_MODEL_ID="meta-llama/Llama-3.1-8B-Instruct"  # ~5-6GB in 4-bit
-```
-Note: Llama repos are gated on Hugging Face - you'll need to accept Meta's
-license on the model page and run `huggingface-cli login` once before the
-first download. Still free, just an extra one-time step. Qwen (the default)
-skips this entirely.
 
 ## Run
 

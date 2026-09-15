@@ -14,9 +14,9 @@ identical seeds. Fixed with three layers, all domain-agnostic:
      candidates instead of regenerating the same "most likely" answer.
 """
 import os
-from config import DATA_DIR, DEEPSEEK_MODEL_CHEAP, DIVERSITY_HINT_SAMPLE_SIZE, MAX_DEDUP_RETRIES, START_DATE, END_DATE
+from config import DATA_DIR, DIVERSITY_HINT_SAMPLE_SIZE, MAX_DEDUP_RETRIES, START_DATE, END_DATE
 from utils.io_utils import ResumableWriter
-from utils.llm_client import call_llm
+from utils.local_llm_client import call_local_llm
 from utils.search_client import search
 
 OUTPUT_PATH = os.path.join(DATA_DIR, "step1_seeds.json")
@@ -122,12 +122,11 @@ def run(domains: list, n_per_domain: int = 3) -> None:
                     start_date=START_DATE,
                     end_date=END_DATE
                 )
-                # print(results)
                 try:
-                    out = call_llm(
+                    out = call_local_llm(
                         SYSTEM_PROMPT,
                         _build_user_prompt(primary_domain+"-"+subdomain, results, exclude_hint, target_type),
-                        model=DEEPSEEK_MODEL_CHEAP, use_secondary=True, sample=True,
+                        sample=True
                     )
                 except Exception as e:
                     out = {"status": "failed", "reason": str(e)}
@@ -135,8 +134,6 @@ def run(domains: list, n_per_domain: int = 3) -> None:
                 if out.get("status") == "ok" and out.get("entity_A"):
                     norm = out["entity_A"].strip().lower()
                     if norm in used_norm:
-                        # exact duplicate slipped through despite the hint - reject
-                        # programmatically and retry with sampling, don't accept it
                         continue
                     used_norm.add(norm)
                     used_list.append(out["entity_A"])
@@ -144,7 +141,6 @@ def run(domains: list, n_per_domain: int = 3) -> None:
                     break
                 else:
                     record = {"id": seed_id, "domain": primary_domain, "subdomain": subdomain, **out}
-                    # a genuine "nothing usable" failure - no point retrying with sampling
                     break
 
             if record is None:

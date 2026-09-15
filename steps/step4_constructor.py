@@ -1,19 +1,28 @@
 """
 Step 4 — Question Constructor Agent
 
-Constructs a natural multihop research question from the chain.
+Constructs a natural multihop research question from the chain, using ONLY
+each hop's broad relation CATEGORY (relation_type_used) as the clue - not
+the specific extracted relation phrase, and not the supporting sentence.
 
-The last entity in the chain is always the final answer.
+Rationale: relation_type_used, anchored to a specific entity, requires a
+solver to do the SAME discovery search Step 2 originally performed to find
+that hop - genuine re-discovery. The specific extracted relation phrase and
+supporting sentence are already-digested results of that search, and handing
+them to a solver short-circuits the work rather than requiring it.
 
-The question should use the chain of relationships as clues and guide the
-solver from the first entity toward the final entity.
+Entity 1 is the only entity named directly (it's a legitimate, vetted-obscure
+starting point, never the answer). Every entity from Entity 2 through the
+Final Entity is described ONLY through its relation-category clue, never by
+name - this closes a real gap where an intermediate entity, if named, could
+let a solver skip straight past the chain that was built to find it.
 
 Output: data/step4_questions.json
 """
 import os
-from config import DATA_DIR, DEEPSEEK_MODEL_STRONG
+from config import DATA_DIR
 from utils.io_utils import ResumableWriter, load_json_list
-from utils.llm_client import call_llm
+from utils.local_llm_client import call_local_llm
 
 
 INPUT_PATH = os.path.join(DATA_DIR, "step3_filtered.json")
@@ -27,39 +36,42 @@ You are given a chain of entities:
 
 Entity 1 -> Entity 2 -> ... -> Final Entity
 
-The LAST entity is always the answer.
+connected hop by hop, where each hop has a RELATION CATEGORY describing what
+kind of connection links the two entities (e.g. "leadership", "election",
+"institution_affiliation"). The LAST entity is always the answer.
 
-Your task is to construct ONE natural-language research question using the
-relationships between the entities as a chain of clues.
+RULES:
 
-Rules:
+1. Name Entity 1 directly and describe it using its known attributes, so the
+   solver has a legitimate, verifiable starting point for research.
 
-1. The question should begin with clues based on Entity 1 and its known
-   attributes rather than simply presenting the chain mechanically.
+2. NEVER name any entity from Entity 2 through the Final Entity. Each must be
+   identified ONLY by describing the relation category that connects it to
+   the entity immediately before it in the chain - phrased as natural
+   language, not as the raw category label (e.g. turn "leadership" into
+   something like "a person who took on a leadership role connected to
+   [the previous entity]" - never the bare word "leadership" itself).
 
-2. Use the relationship between Entity 1 and Entity 2 as the first reasoning
-   step.
+3. Do NOT use any specific extracted fact, date, or detail beyond the
+   relation category - the solver should have to search using the entity
+   and the category type, the same way this chain was originally
+   discovered, not be handed an already-extracted specific that shortcuts
+   that search.
 
-3. Continue using each subsequent relationship as another clue that guides
-   the solver through the chain.
+4. Chain the clues in forward reading order - Entity 1 through the final
+   category-clue pointing at the Final Entity - so the question reads as a
+   single coherent research trail.
 
-4. The LAST entity must be the answer to the question.
+5. Do not mention the final answer directly, by name or by unique
+   description.
 
-5. Do not mention the final answer directly in the question.
-
-6. Make the question creative and natural. It should feel like a research
-   puzzle rather than a list of graph relations.
-
-7. Do not simply copy relation labels. Convert the relationships and
-   supporting facts into natural-language clues.
-
-8. The question should require following the intended chain to discover
-   the final entity.
+6. Make the question read as a natural research puzzle, not a list of
+   category labels or graph edges.
 
 Return ONLY JSON:
 
 {
-  "question": "<final multihop research question>",
+  "question": "<final multihop research question, presented forward>",
   "canonical_answer": "<final entity>",
   "obfuscation_map": {
     "first_entity": "<description of how Entity 1 was presented>"
@@ -84,39 +96,24 @@ def run() -> None:
         hops = chain["hops"]
 
         chain_lines = [
-            f"Entity 1: {entities[0]}",
+            f"Entity 1 (name this directly): {entities[0]}",
             f"Entity 1 attributes: {chain.get('entity_A_attributes', {})}",
         ]
 
         for i, hop in enumerate(hops):
-            chain_lines.append(
-                f"\nHop {i + 1}:"
-            )
-            chain_lines.append(
-                f"From entity: {entities[i]}"
-            )
-            chain_lines.append(
-                f"Relation: {hop['relation']}"
-            )
-            chain_lines.append(
-                f"To entity: {entities[i + 1]}"
-            )
-            chain_lines.append(
-                f"Supporting fact: {hop.get('supporting_sentence', '')}"
-            )
+            chain_lines.append(f"\nHop {i + 1}:")
+            chain_lines.append(f"From entity: {entities[i]}")
+            chain_lines.append(f"Relation category: {hop.get('relation_type_used', 'unknown')}")
+            chain_lines.append(f"To entity (do NOT name this): {entities[i + 1]}")
 
-        chain_lines.append(
-            f"\nFinal answer: {entities[-1]}"
-        )
+        chain_lines.append(f"\nFinal answer (do NOT name or uniquely describe this): {entities[-1]}")
 
         user_prompt = "\n".join(chain_lines)
 
         try:
-            out = call_llm(
+            out = call_local_llm(
                 SYSTEM_PROMPT,
                 user_prompt,
-                model=DEEPSEEK_MODEL_STRONG,
-                use_secondary=True,
                 sample=True,
             )
 

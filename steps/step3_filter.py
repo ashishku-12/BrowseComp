@@ -7,9 +7,9 @@ sources are weak/duplicated.
 Output: data/step3_filtered.json
 """
 import os
-from config import DATA_DIR, DEEPSEEK_MODEL_CHEAP, LOW_CREDIBILITY_DOMAINS
+from config import DATA_DIR, LOW_CREDIBILITY_DOMAINS
 from utils.io_utils import ResumableWriter, load_json_list
-from utils.llm_client import call_llm
+from utils.local_llm_client import call_local_llm
 
 INPUT_PATH = os.path.join(DATA_DIR, "step2_chains.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step3_filtered.json")
@@ -30,7 +30,7 @@ For EACH hop, verify:
 
 1. ENTITY MATCH:
    Does the supporting sentence explicitly mention or unambiguously identify
-   both the source entity and the next entity?
+   the next entity?
 
 2. RELATION MATCH:
    Does the supporting sentence explicitly state the claimed relationship
@@ -118,9 +118,9 @@ def run() -> None:
         )
 
         try:
-            verdict = call_llm(
+            verdict = call_local_llm(
                 SYSTEM_PROMPT,
-                user_prompt, model=DEEPSEEK_MODEL_CHEAP, use_secondary=True,
+                user_prompt
             )
         except Exception as e:
             verdict = {"verdict": "fail", "notes": f"filter agent error: {e}"}

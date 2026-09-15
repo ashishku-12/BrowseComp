@@ -27,7 +27,7 @@ def run_pipeline(domains: list, n_per_domain: int = 3) -> None:
     print("\n=== Step 5: Redundancy / Reasoning-Graph Check ===")
     step5_redundancy.run()
 
-    print("\n=== Step 6: Verifier (blind-solve + evidence re-derivation) ===")
+    print("\n=== Step 6: Verifier ===")
     step6_verify.run()
 
     _print_summary()

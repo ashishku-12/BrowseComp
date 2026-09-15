@@ -8,7 +8,7 @@ Output: data/step5_graphchecked.json
 import os
 from config import DATA_DIR
 from utils.io_utils import ResumableWriter, load_json_list
-from utils.llm_client import call_llm
+from utils.local_llm_client import call_local_llm
 
 INPUT_PATH = os.path.join(DATA_DIR, "step4_questions.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step5_graphchecked.json")
@@ -73,9 +73,9 @@ def run() -> None:
             f"Obfuscation used for first entity: {c.get('obfuscation_map', {}).get('first_entity')}\n"
         )
         try:
-            verdict = call_llm(
+            verdict = call_local_llm(
                 SYSTEM_PROMPT.format(n_hops=n_hops, n_nodes=n_nodes),
-                user_prompt, use_secondary=True,
+                user_prompt
             )
         except Exception as e:
             verdict = {"verdict": "fail", "issues": [f"redundancy agent error: {e}"]}

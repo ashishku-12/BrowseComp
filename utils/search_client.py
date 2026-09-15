@@ -18,12 +18,6 @@ def search(query: str, max_results: int = None, search_depth: str = "advanced", 
         if end_date:
             kwargs["end_date"] = end_date
         resp = _client.search(**kwargs)
-        # resp = _client.search(
-        #     query=query,
-        #     search_depth=search_depth,
-        #     max_results=max_results,
-        #     include_raw_content=False,
-        # )
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -32,7 +26,7 @@ def search(query: str, max_results: int = None, search_depth: str = "advanced", 
         results.append({
             "url": r.get("url", ""),
             "title": r.get("title", ""),
-            "content": r.get("content", ""),   # Tavily's cleaned excerpt
+            "content": r.get("content", ""),
             "score": r.get("score", 0.0),
             "published_date": r.get("published_date", "")
         })

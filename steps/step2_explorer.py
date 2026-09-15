@@ -12,11 +12,11 @@ same exclude-and-retry mechanism already used for duplicates and source reuse.
 """
 import os
 from config import (
-    DATA_DIR, DEEPSEEK_MODEL_STRONG, HOP_COUNT,
+    DATA_DIR, HOP_COUNT,
     MAX_RELATION_ATTEMPTS_PER_HOP, MAX_BACKTRACKS_PER_CHAIN, DIVERSITY_HINT_SAMPLE_SIZE, START_DATE, END_DATE
 )
 from utils.io_utils import ResumableWriter, load_json_list
-from utils.llm_client import call_llm
+from utils.local_llm_client import call_local_llm
 from utils.search_client import search
 import random
 
@@ -25,93 +25,90 @@ OUTPUT_PATH = os.path.join(DATA_DIR, "step2_chains.json")
 
 RELATION_TYPES_BY_DOMAIN = {
     "Politics": [
-        "leadership",
-        "party_affiliation",
-        "government_institution",
-        "election",
-        "legislation_policy",
-        "diplomacy_treaty",
+        "specific_appointment_with_date",       
+        "party_membership_with_date",           
+        "committee_or_institution_role",       
+        "specific_election_result",             
+        "named_bill_or_policy_sponsorship",     
+        "named_treaty_or_agreement",            
     ],
 
     "Geography": [
-        "location",
-        "geographical_feature",
-        "administrative_region",
-        "border_neighbor",
-        "exploration",
-        "naming_origin",
+        "site_specific_incident",               
+        "named_geographical_feature",           
+        "administrative_boundary_change",      
+        "specific_border_dispute_or_treaty",    
+        "named_expedition_or_survey",        
+        "documented_naming_event",       
     ],
 
     "Video Games": [
-        "developer_publisher",
-        "creator",
-        "franchise",
-        "platform_release",
-        "character_universe",
-        "game_event",
+        "specific_title_development_credit",  
+        "named_creator_credit",                 
+        "specific_franchise_entry",             
+        "dated_platform_release",               
+        "named_character_appearance",           
+        "specific_tournament_or_convention",    
     ],
 
     "Music": [
-        "artist_group",
-        "album_work",
-        "recording_production",
-        "collaboration",
-        "label_release",
-        "performance_event",
+        "named_group_membership_with_dates",    
+        "specific_album_or_track_credit",       
+        "named_session_or_production_credit",   
+        "credited_feature_or_session_work",     
+        "specific_label_signing_with_date",     
+        "named_dated_performance",              
     ],
 
     "Sports": [
-        "player_team",
-        "coach_management",
-        "competition",
-        "achievement",
-        "sports_organization",
-        "event_participation",
+        "specific_team_tenure_with_dates",       
+        "specific_coaching_tenure_with_dates",   
+        "named_competition_result",              
+        "specific_dated_achievement",            
+        "specific_organizational_role",          
+        "named_event_participation_with_date",   
     ],
 
     "History": [
-        "participants",
-        "leadership",
-        "location",
-        "conflict_campaign",
-        "political_institution",
-        "historical_consequence",
+        "named_participant_role",               
+        "specific_command_or_office",           
+        "site_specific_historical_event",       
+        "named_campaign_or_battle",             
+        "specific_institutional_role",          
+        "documented_direct_consequence",        
     ],
 
     "Art": [
-        "artist_artwork",
-        "art_movement",
-        "museum_collection",
-        "commission_patron",
-        "exhibition",
-        "artistic_influence",
+        "specific_artwork_attribution",         
+        "named_movement_affiliation_with_dates",
+        "specific_acquisition_or_collection_entry", 
+        "named_commission_with_date",           
+        "specific_named_exhibition",            
+        "documented_direct_influence",          
     ],
 
     "Science & Technology": [
-        "researcher_discovery",
-        "author_work",
-        "institution_affiliation",
-        "project_product",
-        "conference_event",
-        "scientific_collaboration",
+        "specific_discovery_credit",            
+        "specific_publication_credit",          
+        "dated_institutional_affiliation",      
+        "named_project_role",                   
+        "specific_named_conference_presentation",
+        "named_coauthorship_or_joint_project",  
     ],
 
     "TV Shows & Movies": [
-        "cast",
-        "director_creator",
-        "writer_producer",
-        "series_franchise",
-        "release_distribution",
-        "award_festival",
+        "specific_named_role_credit",           
+        "specific_title_directing_credit",      
+        "specific_title_writing_credit",       
+        "specific_franchise_installment",       
+        "dated_release_or_distribution_deal",   
+        "specific_named_award_or_festival",     
     ],
 
     "Other": [
-        "person_relationship",
-        "organization_relationship",
-        "location_relationship",
-        "event_relationship",
-        "work_relationship",
-        "historical_relationship",
+        "documented_specific_incident",         
+        "named_joint_credit_or_appearance",
+        "dated_formal_agreement",
     ],
 }
 
@@ -136,17 +133,18 @@ IMPORTANT - evidence grounding:
 - next_entity must be explicitly present in the provided search evidence; never invent or infer an entity.
 - The relationship between the source entity and next_entity must be explicitly stated in the evidence; never infer a relationship.
 - supporting_sentence must be copied exactly from the source evidence; never fabricate, paraphrase, or reconstruct it.
-
+- next_entity_type must be one of: person, organization, place, event, work.
+- next_entity should not be same as the source entity
 
 Return ONLY JSON:
 {{
   "found": true,
-  "relation": "<short relation phrase, e.g. 'appointed head coach of'>",
+  "relation": "<relation phrase, e.g. 'appointed head coach of'>",
   "next_entity": "<name>",
-  "next_entity_type": "<>",
+  "next_entity_type": "<person|organization|place|event|work>",
   "next_entity_salience": "low"|"medium"|"high",
   "source_url": "<url>",
-  "supporting_sentence": "<exact sentence from the source that states the relation>",
+  "supporting_sentence": "<exact sentence from the source that states the relation and next entity>",
   "confidence": "explicit_statement"
 }}
 If nothing usable is found for this relation type, return:
@@ -204,10 +202,10 @@ def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_u
         )
 
     try:
-        out = call_llm(
+        out = call_local_llm(
             SYSTEM_PROMPT.format(relation_type=rel_type),
             user_prompt,
-            model=DEEPSEEK_MODEL_STRONG, use_secondary=True, sample=True,
+            sample=True
         )
     except Exception as e:
         out = {"found": False, "reason": str(e)}
@@ -227,7 +225,7 @@ def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_u
         out["relation_type_used"] = rel_type
         return out
 
-    return out  # already shaped {"found": False, "reason": ...} from the model
+    return out  
 
 
 def _build_chain(entity_A: str, domain: str):
@@ -254,7 +252,7 @@ def _build_chain(entity_A: str, domain: str):
         whole_chain_entities = {e.strip().lower() for e in entities[:hop_idx + 1]}
         combined_exclude = excludes[hop_idx] | whole_chain_entities
         previous_relation = hops[hop_idx - 1]["relation"] if hop_idx > 0 and hops[hop_idx - 1] else None
-        hop = _explore_hop(current_entity, domain=domain, exclude=combined_exclude, exclude_source_urls=used_source_urls, previous_relation=previous_relation)
+        hop = _explore_hop(current_entity, domain=domain)
 
         if not hop.get("found"):
             excludes[hop_idx] = set()  # reset in case we reach this depth again via a different earlier branch
