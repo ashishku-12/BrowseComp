@@ -18,15 +18,16 @@ Examples:
 """
 import argparse
 from pipeline import run_pipeline
-from steps import step1_seed, step2_explorer, step3_filter, step4_constructor, step5_redundancy, step6_verify
+from steps import step1_seed, step2_explorer, step3_filter, step4_clue_generator, step5_constructor, step6_redundancy, step7_verify
 
 STEP_FUNCS = {
     1: lambda args: step1_seed.run(domains=args.domains, n_per_domain=args.n_per_domain),
     2: lambda args: step2_explorer.run(),
     3: lambda args: step3_filter.run(),
-    4: lambda args: step4_constructor.run(),
-    5: lambda args: step5_redundancy.run(),
-    6: lambda args: step6_verify.run(),
+    4: lambda args: step4_clue_generator.run(),
+    5: lambda args: step5_constructor.run(),
+    6: lambda args: step6_redundancy.run(),
+    7: lambda args: step7_verify.run(),
 }
 
 
@@ -78,7 +79,7 @@ def main():
     parser.add_argument("--n-per-domain", type=int, default=3)
     parser.add_argument("--non-interactive", action="store_true",
                          help="Never prompt; falls back to a small default domain list if --domains is also omitted.")
-    parser.add_argument("--only-step", type=int, choices=range(1, 7), default=None,
+    parser.add_argument("--only-step", type=int, choices=range(1, 8), default=None,
                          help="Run a single step instead of the full pipeline (still resumable).")
     args = parser.parse_args()
 

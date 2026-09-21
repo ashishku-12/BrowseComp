@@ -20,8 +20,8 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 START_DATE = os.environ.get("RECENCY_START_DATE", "2026-01-01")
 END_DATE = os.environ.get("RECENCY_END_DATE", "2026-12-01")
 
-MAX_RELATION_ATTEMPTS_PER_HOP = 6   # step 2: retry different relation types before dead-end
-MAX_BACKTRACKS_PER_CHAIN = 6        # step 2: try alternate B candidates
+MAX_RELATION_ATTEMPTS_PER_HOP = 12   # step 2: retry different relation types before dead-end
+MAX_BACKTRACKS_PER_CHAIN = 20        # step 2: try alternate B candidates
 HOP_COUNT = int(os.environ.get("HOP_COUNT", "2"))   # chain length: A -> B -> C -> D -> E (4 hops = 5 entities)
 SEARCH_RESULTS_PER_QUERY = 10
 

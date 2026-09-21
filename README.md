@@ -55,9 +55,10 @@ This means:
 | `step1_seeds.json` | Seed Agent | Candidate entity A's + attributes |
 | `step2_chains.json` | Chain Explorer | Full A->B->C chains (or dead-end records) |
 | `step3_filtered.json` | Filtering Agent | Chains + pass/fail salience & credibility verdict |
-| `step4_questions.json` | Question Constructor | Obfuscated question + canonical answer |
-| `step5_graphchecked.json` | Redundancy Check | + reasoning graph, shortcut/redundancy verdict |
-| `step6_verified.json` | Verifier | **Final file** - + blind-solve, `final_verdict` |
+| `step4_clues.json` | Clue Generator | Supporting Sentence + Source Entity + Next Entity |
+| `step5_questions.json` | Question Constructor | Obfuscated question + canonical answer |
+| `step6_graphchecked.json` | Redundancy Check | + reasoning graph, shortcut/redundancy verdict |
+| `step7_verified.json` | Verifier | **Final file** - + blind-solve, `final_verdict` |
 
 The usable dataset is every record in `step6_verified.json` where
 `verification.final_verdict == "accept"`.

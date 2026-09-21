@@ -6,7 +6,7 @@ only does the remaining work, at whichever step it was left at.
 """
 import os
 from config import DATA_DIR
-from steps import step1_seed, step2_explorer, step3_filter, step4_constructor, step5_redundancy, step6_verify
+from steps import step1_seed, step2_explorer, step3_filter, step4_clue_generator, step5_constructor, step6_redundancy, step7_verify
 
 
 def run_pipeline(domains: list, n_per_domain: int = 3) -> None:
@@ -21,21 +21,24 @@ def run_pipeline(domains: list, n_per_domain: int = 3) -> None:
     print("\n=== Step 3: Filtering Agent ===")
     step3_filter.run()
 
-    print("\n=== Step 4: Question Constructor ===")
-    step4_constructor.run()
+    print("\n=== Step 4: Clue Generator ===")
+    step4_clue_generator.run()
 
-    print("\n=== Step 5: Redundancy / Reasoning-Graph Check ===")
-    step5_redundancy.run()
+    print("\n=== Step 5: Question Constructor ===")
+    step5_constructor.run()
 
-    print("\n=== Step 6: Verifier ===")
-    step6_verify.run()
+    print("\n=== Step 6: Redundancy / Reasoning-Graph Check ===")
+    step6_redundancy.run()
+
+    print("\n=== Step 7: Verifier ===")
+    step7_verify.run()
 
     _print_summary()
 
 
 def _print_summary() -> None:
     from utils.io_utils import load_json_list
-    final = load_json_list(os.path.join(DATA_DIR, "step6_verified.json"))
+    final = load_json_list(os.path.join(DATA_DIR, "step7_verified.json"))
     accepted = [r for r in final if r["verification"]["final_verdict"] == "accept"]
     print(f"\n=== Summary ===")
     print(f"Final accepted questions: {len(accepted)} / {len(final)} verified candidates")

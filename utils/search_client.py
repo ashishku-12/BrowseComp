@@ -31,3 +31,25 @@ def search(query: str, max_results: int = None, search_depth: str = "advanced", 
             "published_date": r.get("published_date", "")
         })
     return results
+
+
+from tavily import TavilyClient
+
+
+def extract(urls: list[str]):
+    """
+    Extract webpage content using Tavily Extract API.
+
+    Args:
+        urls: List of webpage URLs
+        api_key: Tavily API key
+
+    Returns:
+        List of extracted documents
+    """
+
+    response = _client.extract(
+        urls=urls
+    )
+
+    return response["results"]

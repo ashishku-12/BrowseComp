@@ -122,12 +122,21 @@ Hard requirements:
   and itself likely to have further documented relations.
 - Prefer a relation type of: {relation_type}, but only if the evidence supports it.
 
-IMPORTANT - prefer LESS FAMOUS candidates: when the evidence supports more
+{terminal_uniqueness_block}
+
+IMPORTANT - prefer LESS FAMOUS candidates obscure: when the evidence supports more
 than one possible next entity, prefer the one a well-informed person would
 be LESS likely to already know, over a globally famous "household name" -
 this makes the resulting question genuinely hard to find rather than
 trivially guessable. Also self-rate how famous/recognizable the next entity
 you picked actually is.
+
+IMPORTANT - entity identity: many entity names are ambiguous (e.g. "Manchester"
+could mean the city OR the football club). Alongside next_entity, provide
+next_entity_identity: a short phrase disambiguating EXACTLY which sense of
+that name your evidence is about (e.g. "the football club" vs "the city in
+England"). This identity will be carried forward so the next hop searches
+for the correct sense, not a different entity that happens to share the name.
 
 IMPORTANT - evidence grounding:
 - next_entity must be explicitly present in the provided search evidence; never invent or infer an entity.
@@ -135,14 +144,17 @@ IMPORTANT - evidence grounding:
 - supporting_sentence must be copied exactly from the source evidence; never fabricate, paraphrase, or reconstruct it.
 - next_entity_type must be one of: person, organization, place, event, work.
 - next_entity should not be same as the source entity
+- next_entity should be stated in the suppporting_sentence.
 
 Return ONLY JSON:
 {{
   "found": true,
   "relation": "<relation phrase, e.g. 'appointed head coach of'>",
   "next_entity": "<name>",
+  "next_entity_identity": "<short phrase disambiguating which sense of this name is meant>",
   "next_entity_type": "<person|organization|place|event|work>",
   "next_entity_salience": "low"|"medium"|"high",
+  "next_entity_unique": true|false,
   "source_url": "<url>",
   "supporting_sentence": "<exact sentence from the source that states the relation and next entity>",
   "confidence": "explicit_statement"
@@ -151,123 +163,125 @@ If nothing usable is found for this relation type, return:
 {{"found": false, "reason": "<why>"}}
 """
 
+TERMINAL_UNIQUENESS_BLOCK = """
+IMPORTANT - this is the FINAL hop, and next_entity will become the answer to
+the whole question. Before finalizing your choice, check: does the evidence
+show that the source entity + this relation points to EXACTLY ONE possible
+entity, or could the evidence equally support more than one valid answer
+(e.g. the source entity has several people/things fitting this same relation)?
+Set next_entity_unique to true ONLY if you are confident this is the single,
+unambiguous answer. If genuinely uncertain, set it to false.
+"""
 
-def _explore_hop(entity: str, domain: str, exclude: set = None, exclude_source_urls: set = None,
-                  previous_relation: str = None) -> dict:
-    exclude = exclude or set()
-    exclude_source_urls = exclude_source_urls or set()
-    exclude_hint = list(exclude)[:DIVERSITY_HINT_SAMPLE_SIZE]
 
+def _explore_hop(entity: str, domain: str, entity_identity: str = None, is_terminal_hop: bool = False) -> dict:
     relation_types = RELATION_TYPES_BY_DOMAIN.get(domain, RELATION_TYPES_BY_DOMAIN["Other"])
-    rel_type = random.choice(relation_types)  # ONE random category per call - no loop
+    rel_type = random.choice(relation_types)
     search_relation = rel_type.replace("_", " ")
+
+    entity_ref = f"{entity} ({entity_identity})" if entity_identity else entity
 
     results = search(
         f"What connection, role, relationship, or association involving "
-        f"{entity} can be found through {search_relation} in 2026?",
-        start_date=START_DATE,
-        end_date=END_DATE
+        f"{entity_ref} can be found through {search_relation}?",
+        start_date=START_DATE, end_date=END_DATE
     )
-
     usable_results = [r for r in results if "error" not in r]
     if not usable_results:
         results = search(
             f"What connection, role, relationship, or association involving "
-            f"{entity} can be found through {search_relation} in 2026?"
+            f"{entity_ref} can be found through {search_relation}?"
         )
         usable_results = [r for r in results if "error" not in r]
     if not usable_results:
         return {"found": False, "reason": f"no usable search results for relation type '{rel_type}'"}
 
-    user_prompt = f"Source entity: {entity}\n\nSearch results:\n" + "\n\n".join(
+    user_prompt = f"Source entity: {entity_ref}\n\nSearch results:\n" + "\n\n".join(
         f"[{i}] {r.get('title')} ({r.get('url')})\n{r.get('content','')[:700]}"
         for i, r in enumerate(usable_results)
     )
-    if previous_relation:
-        user_prompt += (
-            f"\n\nThe chain so far reached this entity via: \"{previous_relation}\". "
-            "Where the evidence supports it, PREFER a next relation that continues "
-            "this same theme or storyline, rather than an unrelated fact about this entity."
-        )
-    if exclude_hint:
-        user_prompt += (
-            "\n\nDo NOT propose any of these as the next entity - already "
-            f"tried at this step: {', '.join(exclude_hint)}. Pick a different one."
-        )
-    if exclude_source_urls:
-        user_prompt += (
-            "\n\nDo NOT use any of these source URLs - already used earlier "
-            f"in this chain: {', '.join(list(exclude_source_urls)[:DIVERSITY_HINT_SAMPLE_SIZE])}. "
-            "Find a DIFFERENT source for this hop."
-        )
+
+    terminal_block = TERMINAL_UNIQUENESS_BLOCK if is_terminal_hop else ""
 
     try:
-        out = call_local_llm(
-            SYSTEM_PROMPT.format(relation_type=rel_type),
-            user_prompt,
-            sample=True
-        )
+        out = call_local_llm(SYSTEM_PROMPT.format(relation_type=rel_type, terminal_uniqueness_block=terminal_block), user_prompt, sample=True)
     except Exception as e:
         out = {"found": False, "reason": str(e)}
 
     if out.get("found"):
-        candidate_norm = out["next_entity"].strip().lower()
-        candidate_url = (out.get("source_url") or "").strip()
         candidate_salience = out.get("next_entity_salience", "medium")
-
-        if candidate_norm in exclude:
-            return {"found": False, "reason": f"'{out['next_entity']}' already tried/excluded"}
-        if candidate_url and candidate_url in exclude_source_urls:
-            return {"found": False, "reason": "source URL already used earlier in this chain"}
         if candidate_salience == "high":
             return {"found": False, "reason": f"'{out['next_entity']}' rejected for high salience"}
+
+        if is_terminal_hop and out.get("next_entity_unique") is False:
+            return {"found": False, "reason": f"'{out['next_entity']}' not confidently unique as final answer"}
 
         out["relation_type_used"] = rel_type
         return out
 
-    return out  
+    return out
 
 
-def _build_chain(entity_A: str, domain: str):
-    """
-    True DFS with backtracking - one exclusion set per hop POSITION for
-    entity names, PLUS a running set of source URLs used so far in the
-    whole chain (recomputed fresh each time from the currently-accepted
-    hops, so it automatically shrinks correctly on backtrack).
-    Returns (entities, hops) on success, or (None, fail_reason) on failure.
-    """
-    excludes = [set() for _ in range(HOP_COUNT)]  # excludes[i] = rejected next_entity values at hop i
+def _build_chain(entity_A: str, domain: str, entity_A_identity: str = None):
     entities = [entity_A]
+    identities = [entity_A_identity]
     hops = [None] * HOP_COUNT
     hop_idx = 0
     backtracks = 0
+    entity_types = ["person", "organization", "place", "event", "work"]
 
     while 0 <= hop_idx < HOP_COUNT:
         if backtracks > MAX_BACKTRACKS_PER_CHAIN:
             return None, f"exceeded backtrack budget ({MAX_BACKTRACKS_PER_CHAIN}) at hop {hop_idx + 1}"
 
         current_entity = entities[hop_idx]
-        # source URLs already locked in by earlier, currently-accepted hops in this chain
-        used_source_urls = {h["source_url"] for h in hops[:hop_idx] if h and h.get("source_url")}
-        whole_chain_entities = {e.strip().lower() for e in entities[:hop_idx + 1]}
-        combined_exclude = excludes[hop_idx] | whole_chain_entities
-        previous_relation = hops[hop_idx - 1]["relation"] if hop_idx > 0 and hops[hop_idx - 1] else None
-        hop = _explore_hop(current_entity, domain=domain)
+        current_identity = identities[hop_idx]
+
+        visited_entities = {e.strip().lower() for e in entities[:hop_idx + 1]}
+        is_terminal_hop = hop_idx == HOP_COUNT - 1
+        hop = _explore_hop(current_entity, domain=domain, entity_identity=current_identity, is_terminal_hop=is_terminal_hop)
 
         if not hop.get("found"):
-            excludes[hop_idx] = set()  # reset in case we reach this depth again via a different earlier branch
             hop_idx -= 1
             if hop_idx < 0:
                 return None, f"hop1 exhausted with no further backtrack possible: {hop.get('reason')}"
-            failed_entity_norm = entities[hop_idx + 1].strip().lower()
-            excludes[hop_idx].add(failed_entity_norm)
             entities = entities[:hop_idx + 1]
+            identities = identities[:hop_idx + 1]
+            backtracks += 1
+            continue
+
+        if hop.get("next_entity", "").strip().lower() in visited_entities:
+            hop_idx -= 1
+            if hop_idx < 0:
+                return None, f"hop1 exhausted with no further backtrack possible: duplicate next_entity '{hop.get('next_entity')}'"
+            entities = entities[:hop_idx + 1]
+            identities = identities[:hop_idx + 1]
+            backtracks += 1
+            continue
+
+        if hop.get("next_entity_type", "").strip().lower() not in entity_types:
+            hop_idx -= 1
+            if hop_idx < 0:
+                return None, f"hop1 exhausted with no further backtrack possible: invalid next_entity_type '{hop.get('next_entity_type')}'"
+            entities = entities[:hop_idx + 1]
+            identities = identities[:hop_idx + 1]
+            backtracks += 1
+            continue
+        
+        if hop.get("next_entity_identity", "")=="":
+            hop_idx -= 1
+            if hop_idx < 0:
+                return None, f"hop1 exhausted with no further backtrack possible: missing next_entity_identity for '{hop.get('next_entity')}'"
+            entities = entities[:hop_idx + 1]
+            identities = identities[:hop_idx + 1]
             backtracks += 1
             continue
 
         next_entity = hop["next_entity"]
+        next_identity = hop.get("next_entity_identity")
         hops[hop_idx] = hop
         entities = entities[:hop_idx + 1] + [next_entity]
+        identities = identities[:hop_idx + 1] + [next_identity]
         hop_idx += 1
 
     return (entities, hops), None
@@ -284,13 +298,15 @@ def run() -> None:
 
         entity_A = seed["entity_A"]
         domain = seed.get("domain", "Other")
-        result, fail_reason = _build_chain(entity_A=entity_A, domain=domain)
+        entity_A_identity = seed.get("entity_identity")
+        result, fail_reason = _build_chain(entity_A=entity_A, domain=domain, entity_A_identity=entity_A_identity)
 
         if result is not None:
             entities, hops = result
             record = {
                 "id": chain_id, "seed_id": seed["id"],
                 "entity_A": entity_A, "entity_A_attributes": seed.get("known_attributes", {}),
+                "entity_A_identity": entity_A_identity, "entity_A_type": seed.get("entity_A_type"),
                 "entities": entities,
                 "hops": hops,
                 "entity_final": entities[-1],

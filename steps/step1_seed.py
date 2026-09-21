@@ -36,10 +36,19 @@ Requirements for a good seed:
 - Must have several distinguishing attributes (occupation/type, nationality/location,
   active time period, domain) that could later be used to describe it WITHOUT naming it.
 
+Also provide entity_identity: a short phrase disambiguating EXACTLY which
+real-world entity this name refers to, in case the name alone is ambiguous
+(e.g. for "Manchester", specify "the football club" vs "the city in
+England"; for a common person's name, specify their distinguishing role,
+e.g. "the marine biologist", not just "person"). This must be specific
+enough that a search using the name plus this identity would find the
+correct entity, not a different one sharing the same name.
+
 Return ONLY a JSON object with this exact shape:
 {
   "entity_A": "<name>",
-  "entity_type": "<person|organization|place|event|work>",
+  "entity_A_type": "<person|organization|place|event|work>",
+  "entity_identity": "<short phrase disambiguating which specific entity this name refers to>",
   "source_url": "<best source url from the provided results>",
   "known_attributes": {"...": "..."},
   "salience_note": "<why this is a good, moderately-obscure seed>",
