@@ -30,7 +30,8 @@ entity, for a multihop research puzzle. The solver must find this entity via
 genuine search - never by having its name stated.
 
 You are given:
-- source_entity: the entity the chain is currently at.
+- source_entity (PRIVATE - for locating it in the evidence only, NEVER state
+  this name in your output clue): the entity the chain is currently at.
 - target_entity (PRIVATE - for locating it in the evidence only, NEVER state
   this name in your output clue).
 - target_entity_type / target_entity_identity: what the target is and which

@@ -1,17 +1,30 @@
 """
 Step 5 — Question Constructor Agent
 
-Constructs a natural multihop research question ENTIRELY from clues - no
-entity is named directly anywhere in this step, including Entity 1.
+Builds the question from clues. The starting entity (Entity A) is passed
+directly by name into the assembler; every other entity in the chain,
+including intermediate hops and the final answer, is never named.
 
-CHANGE: Entity 1 was previously handed to the assembler as a bare name +
-attributes, the only entity in the whole chain treated this way. Now Entity
-1 gets its own clue, built from its known attributes (the same obscuring
-discipline every other hop already goes through) - the assembler receives
-ONLY clue text, entity types, and NOTHING that names any entity, including
-the final answer (removed in the previous fix). This makes the whole chain
-structurally uniform: N+1 entities, N+1 clues (Entity 1's attribute-clue +
-one clue per hop), zero names anywhere in what the model sees.
+FIX (this revision):
+1. The LAST clue in the chain was previously being appended as just
+   another fact, so the assembled question never actually asked the
+   solver to identify the final answer - it stated something true about
+   it and stopped. The assembler is now explicitly instructed to convert
+   the LAST clue into the question's interrogative target ("...which/what/
+   who is the entity that <last clue's relation>?"), not restate it as a
+   flat sentence.
+2. Leak-checking previously only verified entity_A's name was present and
+   the final answer's name was absent. It never checked whether an
+   INTERMEDIATE entity (any hop between A and the answer) leaked into the
+   assembled question - even though Step 4 now guards against this at the
+   clue level, the assembler is a second LLM call that can reintroduce a
+   name while "smoothing" phrasing, so this is now checked independently
+   here as well (defense in depth).
+3. The assembler was allowed to "adjust phrasing," which in practice let
+   it quietly generalize a specific clue into a vaguer one while smoothing
+   transitions (the same failure mode Step 4 had with over-vague
+   obscuring). The prompt now explicitly forbids loosening/generalizing
+   any clue's specificity during assembly.
 
 Output: data/step5_questions.json
 """
@@ -25,99 +38,78 @@ INPUT_PATH = os.path.join(DATA_DIR, "step4_clues.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step5_questions.json")
 
 
-ENTITY_A_CLUE_SYSTEM_PROMPT = """You write ONE short clue phrase identifying
-a starting entity for a research puzzle, using ONLY its known attributes -
-never its name.
-
-You are given:
-- entity_type: what kind of thing it is (person/organization/place/event/work)
-- known_attributes: a set of facts about this entity (occupation/role,
-  nationality or location, active time period, domain, etc.)
-
-Write a SHORT clue (roughly one sentence) that:
-- Never names the entity.
-- Uses ONLY the given attributes - do not invent any detail not present in
-  known_attributes.
-- Is grammatically and semantically correct for entity_type.
-- Is specific enough, combining the given attributes together, that a
-  solver doing real research could identify this one entity - not so vague
-  it could be almost anyone/anything of that type.
-
-Return ONLY JSON:
-{"clue": "<one short natural-language clue phrase>"}
-"""
-
-
 ASSEMBLER_SYSTEM_PROMPT = """You are a Question Assembler for a difficult multihop
 web-research question dataset.
 
-You are given a sequence of ALREADY-WRITTEN clues, in order - the FIRST clue
-describes the starting entity, each following clue describes the next
-entity in the chain, and the LAST clue describes the Final Entity (the
-answer). NO entity is named anywhere in what you are given, including the
-final answer - only clue text and each entity's type.
+You are given a sequence of ALREADY-WRITTEN clues, in order, each with its
+own entity type - the FIRST clue NAMES the starting entity directly, each
+following clue describes the next entity in the chain without naming it,
+and the LAST clue describes the Final Entity (the answer) without naming
+it. Only the starting entity is named in what you are given; no other
+entity - not an intermediate hop, not the final answer - is named, and
+none but the starting entity should appear named in your output.
 
-Your ONLY job is to stitch these clues into ONE single, coherent, natural-
-reading research question, in forward order. You must NOT:
+Your job has TWO parts:
+
+PART 1 - CHAIN THE CLUES (all clues except the last):
+Stitch these clues into one coherent forward-reading sequence, connecting
+each entity to the next via its clue ("starting from [Entity A, named],
+identify the [type] that [clue 1], then the [type] that [clue 2], ...").
+
+PART 2 - TURN THE LAST CLUE INTO THE QUESTION:
+The LAST clue describes the Final Entity - this is the answer the solver
+must produce. Do NOT append the last clue as a flat statement of fact.
+Instead, rephrase it as the actual interrogative the solver must answer,
+using the connective built up from the earlier clues as the subject
+("...what/which/who is the [final entity type] that <last clue's
+relation, rephrased as what is being asked for>?"). The question must end
+by clearly asking the solver to name/identify this final entity - if a
+correct solver could answer your question without ever stating what the
+final entity is, the question is wrong.
+
+You must NOT:
 - Introduce any new fact, detail, date, or description not already present
   in the given clues.
-- Change what any clue means or add specificity to it.
-- Name ANY entity in the chain, including the starting entity or the final
-  answer - none of them are named in your input, and none should appear
-  named in your output.
+- Change what any clue means, loosen it, or make it more generic/vaguer
+  than it was given to you - preserve each clue's exact level of
+  specificity, only rephrase its grammar to fit the sentence.
+- Add specificity to any clue that isn't already there either.
+- Name ANY entity in the chain OTHER than the starting entity - in
+  particular, never name any intermediate entity or the final answer.
 - Describe the final answer so specifically that it becomes effectively
-  obvious without being named - that defeats the purpose the same as
-  naming it outright.
-- Produce MORE THAN ONE question. The clues describe a single chain leading
-  to ONE final answer - do not ask separate questions about intermediate
-  entities in the chain.
+  obvious without being named.
+- Produce MORE THAN ONE question - the clues describe a single chain
+  leading to ONE final answer, do not ask separate questions about
+  intermediate entities.
 
 You MUST:
-- Match the question's final interrogative wording to final_entity_type:
-  use "Who" ONLY if final_entity_type is "person" - for organization,
-  place, event, or work, use "What" or "Which" instead, never "who".
+- Keep the starting entity's given name exactly as provided.
+- Match the question's final interrogative wording to the LAST clue's type:
+  use "Who" ONLY if that type is "person" - for organization, place, event,
+  or work, use "What" or "Which" instead, never "who".
+- Keep each clue's own phrasing consistent with ITS OWN stated type when
+  smoothing transitions - never let pronouns or phrasing meant for one
+  entity's type bleed into how a different-typed clue is connected.
 
 You MAY:
 - Adjust connecting words/phrasing so the clues read as one smooth,
   natural research puzzle instead of a mechanical list.
 - Reorder minor phrasing within a clue for readability, without altering
-  its content or specificity.
+  its content, meaning, or specificity.
 
 Return ONLY JSON:
-
-{
-  "question": "<ONE final multihop research question, presented forward>"
-}
+{"question": "<ONE final multihop research question, presented forward, ending in the interrogative that asks the solver to identify the final entity>"}
 """
 
 
-def _clue_contains_entity_name(clue: str, entity_name: str) -> bool:
-    if not clue or not entity_name:
+def _text_leaks_entity(text: str, entity_name: str) -> bool:
+    """Programmatic check for an entity name leaking into the assembled
+    question - used for the final answer AND every intermediate entity,
+    since the assembler is a second LLM call that can reintroduce a name
+    Step 4 had already scrubbed."""
+    if not text or not entity_name:
         return False
-    return entity_name.strip().lower() in clue.strip().lower()
-
-
-def _build_entity_A_clue(entity_A: str, entity_A_type: str, entity_A_attributes: dict, max_retries: int = 4) -> str:
-    prompt = (
-        f"entity_type: {entity_A_type}\n"
-        f"known_attributes: {entity_A_attributes}\n"
-    )
-
-    for attempt in range(max_retries + 1):
-        try:
-            out = call_local_llm(ENTITY_A_CLUE_SYSTEM_PROMPT, prompt, sample=True)
-        except Exception:
-            return ""
-
-        clue = out.get("clue", "")
-        if not clue:
-            continue
-        if _clue_contains_entity_name(clue, entity_A):
-            continue  # name leaked despite instruction - retry, same as Step 4's clue check
-
-        return clue
-
-    return ""
+    return entity_name.strip().lower() in text.strip().lower()
 
 
 def run() -> None:
@@ -138,50 +130,50 @@ def run() -> None:
 
         entity_A = entities[0]
         entity_A_type = chain.get("entity_A_type", "unknown")
-        entity_A_attributes = chain.get("entity_A_attributes", {})
         final_entity_type = hops[-1].get("next_entity_type", "unknown") if hops else "unknown"
 
-        entity_A_clue = _build_entity_A_clue(entity_A, entity_A_type, entity_A_attributes)
+        # Entity A is passed directly (named) - no name-free clue needed.
+        all_clues = [entity_A] + hop_clues
+        all_clue_types = [entity_A_type] + [h.get("next_entity_type", "unknown") for h in hops]
 
-        if not entity_A_clue:
-            record = {**chain, "construction": None, "construction_status": "failed",
-                      "construction_error": "could not build a name-free clue for entity 1"}
-            writer.append(record)
-            print(f"[step5] {chain['id']}: failed (entity 1 clue)")
-            continue
-
-        # Full clue sequence: entity 1's own clue first, then every hop clue
-        all_clues = [entity_A_clue] + hop_clues
-
-        chain_lines = [f"final_entity_type: {final_entity_type}"]
+        chain_lines = []
         for i, clue in enumerate(all_clues):
-            role = "starting entity" if i == 0 else ("final answer" if i == len(all_clues) - 1 else f"hop {i}")
-            chain_lines.append(f"\nClue {i + 1} ({role}): {clue}")
+            role = "starting entity (named)" if i == 0 else ("final answer - must become the question" if i == len(all_clues) - 1 else f"hop {i}")
+            chain_lines.append(f"Clue {i + 1} ({role}, type: {all_clue_types[i]}): {clue}")
 
         user_prompt = "\n".join(chain_lines)
 
         try:
             out = call_local_llm(ASSEMBLER_SYSTEM_PROMPT, user_prompt, sample=True)
             question_text = (out.get("question") or "").strip()
-
-            # defensive check: neither entity 1's name nor the final answer's
-            # name should appear anywhere in the assembled question
-            answer_name = entities[-1].strip().lower()
             q_lower = question_text.lower()
-            if not question_text or answer_name in q_lower or entity_A.strip().lower() in q_lower:
-                out = {"question": None, "error": "name leak or empty question detected"}
+
+            answer_name = entities[-1].strip().lower()
+            # every entity strictly between A and the answer must not appear
+            intermediate_names = entities[1:-1]
+
+            leaked = (
+                not question_text
+                or (answer_name and answer_name in q_lower)
+                or any(_text_leaks_entity(question_text, name) for name in intermediate_names)
+                or (entity_A and entity_A.strip().lower() not in q_lower)
+                or "?" not in question_text  # must actually be a question
+            )
+
+            if leaked:
+                out = {"question": None, "error": "name leak, missing entity A, missing '?', or empty question detected"}
                 status = "failed"
             else:
                 out["question"] = question_text
                 out["canonical_answer"] = entities[-1]
-                out["obfuscation_map"] = {"first_entity": entity_A_clue}
+                out["obfuscation_map"] = {"first_entity": entity_A}
                 status = "constructed"
 
         except Exception as e:
             out = {
                 "question": None,
                 "canonical_answer": None,
-                "obfuscation_map": {"first_entity": entity_A_clue},
+                "obfuscation_map": {"first_entity": entity_A},
                 "error": str(e),
             }
             status = "failed"
@@ -189,7 +181,7 @@ def run() -> None:
         record = {
             **chain,
             "construction": out,
-            "construction_status": status
+            "construction_status": status,
         }
 
         writer.append(record)
