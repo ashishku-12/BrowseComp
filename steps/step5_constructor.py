@@ -29,7 +29,7 @@ FIX (this revision):
 Output: data/step5_questions.json
 """
 import os
-from config import DATA_DIR
+from config import DATA_DIR, MAX_CONSTRUCTION_RETRIES
 from utils.io_utils import ResumableWriter, load_json_list
 from utils.local_llm_client import call_local_llm
 
@@ -121,7 +121,8 @@ def run() -> None:
     writer = ResumableWriter(OUTPUT_PATH, key="id")
 
     for chain in chains:
-        if writer.is_done(chain["id"]):
+        existing = next((r for r in writer.all() if r.get("id") == chain["id"]), None)
+        if existing and existing.get("construction_status") == "constructed":
             continue
 
         entities = chain["entities"]
@@ -143,40 +144,52 @@ def run() -> None:
 
         user_prompt = "\n".join(chain_lines)
 
-        try:
-            out = call_local_llm(ASSEMBLER_SYSTEM_PROMPT, user_prompt, sample=True)
-            question_text = (out.get("question") or "").strip()
-            q_lower = question_text.lower()
+        answer_name = entities[-1].strip().lower()
+        intermediate_names = entities[1:-1]
+        out = {}
+        status = "failed"
 
-            answer_name = entities[-1].strip().lower()
-            # every entity strictly between A and the answer must not appear
-            intermediate_names = entities[1:-1]
+        for attempt in range(1, MAX_CONSTRUCTION_RETRIES + 1):
+            try:
+                attempt_prompt = user_prompt
+                if attempt > 1:
+                    attempt_prompt += (
+                        "\n\nPrevious attempt was invalid. Do not explain your reasoning. "
+                        "Return only the JSON object with a short question value."
+                    )
+                out = call_local_llm(ASSEMBLER_SYSTEM_PROMPT, attempt_prompt, sample=False)
+                question_text = (out.get("question") or "").strip()
+                q_lower = question_text.lower()
+                leaked = (
+                    not question_text
+                    or (answer_name and answer_name in q_lower)
+                    or any(_text_leaks_entity(question_text, name) for name in intermediate_names)
+                    or (entity_A and entity_A.strip().lower() not in q_lower)
+                    or "?" not in question_text
+                )
+                if leaked:
+                    out = {
+                        "question": None,
+                        "error": f"validation failed on attempt {attempt}: name leak, missing entity A, missing '?', or empty question detected",
+                    }
+                    continue
 
-            leaked = (
-                not question_text
-                or (answer_name and answer_name in q_lower)
-                or any(_text_leaks_entity(question_text, name) for name in intermediate_names)
-                or (entity_A and entity_A.strip().lower() not in q_lower)
-                or "?" not in question_text  # must actually be a question
-            )
-
-            if leaked:
-                out = {"question": None, "error": "name leak, missing entity A, missing '?', or empty question detected"}
-                status = "failed"
-            else:
                 out["question"] = question_text
                 out["canonical_answer"] = entities[-1]
                 out["obfuscation_map"] = {"first_entity": entity_A}
                 status = "constructed"
+                break
+            except Exception as e:
+                out = {
+                    "question": None,
+                    "canonical_answer": None,
+                    "obfuscation_map": {"first_entity": entity_A},
+                    "error": f"attempt {attempt}/{MAX_CONSTRUCTION_RETRIES}: {e}",
+                }
 
-        except Exception as e:
-            out = {
-                "question": None,
-                "canonical_answer": None,
-                "obfuscation_map": {"first_entity": entity_A},
-                "error": str(e),
-            }
-            status = "failed"
+        if status != "constructed":
+            out.setdefault("canonical_answer", None)
+            out.setdefault("obfuscation_map", {"first_entity": entity_A})
 
         record = {
             **chain,

@@ -69,7 +69,10 @@ def _generate(system_prompt: str, user_prompt: str, max_new_tokens: int = None, 
     messages.append({"role": "user", "content": user_prompt})
 
     tokenized = _tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt"
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        enable_thinking=False,
     )
     input_ids = tokenized["input_ids"] if hasattr(tokenized, "input_ids") else tokenized
     input_ids = input_ids.to(_model.device)
@@ -90,14 +93,22 @@ def _generate(system_prompt: str, user_prompt: str, max_new_tokens: int = None, 
 
 
 def _extract_json(text: str) -> dict:
-    text = text.strip()
-    text = re.sub(r"^```(json)?", "", text).strip()
-    text = re.sub(r"```$", "", text).strip()
-    # local models sometimes wrap JSON in prose despite instructions - grab the first {...} block
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        text = match.group(0)
-    return json.loads(text)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text).strip()
+    text = re.sub(r"\s*```$", "", text).strip()
+
+    # Models sometimes add a short preamble. Decode the first complete JSON
+    # object instead of using a greedy brace regex, which can include invalid
+    # prose or multiple objects.
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            value, _ = decoder.raw_decode(text[match.start():])
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            continue
+    raise json.JSONDecodeError("No complete JSON object found", text, 0)
 
 
 def call_local_llm(system_prompt: str, user_prompt: str, json_mode: bool = True, sample: bool = False) -> dict:
@@ -105,7 +116,11 @@ def call_local_llm(system_prompt: str, user_prompt: str, json_mode: bool = True,
     (and, since use_secondary=True is used everywhere in this setup, every other step too)."""
     full_system = system_prompt
     if json_mode:
-        full_system += "\n\nRespond with ONLY a single valid JSON object. No prose, no code fences, no explanation outside the JSON."
+        full_system += (
+            "\n\n/no_think\n"
+            "Respond with ONLY a single valid JSON object. No reasoning, no prose, "
+            "no code fences, no explanation outside the JSON."
+        )
 
     raw = _generate(full_system, user_prompt, sample=sample)
     try:

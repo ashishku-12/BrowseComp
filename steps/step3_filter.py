@@ -13,6 +13,7 @@ from utils.local_llm_client import call_local_llm
 
 INPUT_PATH = os.path.join(DATA_DIR, "step2_chains.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "step3_filtered.json")
+FILTER_SCHEMA_VERSION = 2
 
 SYSTEM_PROMPT = """You are an evidence verification agent for a multihop
 question-answering dataset.
@@ -74,6 +75,18 @@ def _domain_flag(url: str) -> bool:
     return any(bad in (url or "") for bad in LOW_CREDIBILITY_DOMAINS)
 
 
+def _hop_verification_passes(hop_verification: list, expected_hops: int) -> bool:
+    if len(hop_verification) != expected_hops:
+        return False
+    return all(
+        hop.get("entity_match") == "yes"
+        and hop.get("relation_match") == "yes"
+        and hop.get("requires_inference") == "no"
+        and hop.get("verdict") == "supported"
+        for hop in hop_verification
+    )
+
+
 def run() -> None:
     chains = [c for c in load_json_list(INPUT_PATH) if c.get("status") == "chain_complete"]
     writer = ResumableWriter(OUTPUT_PATH, key="id")
@@ -81,7 +94,9 @@ def run() -> None:
     fail_reasons = {}  # diagnostic tally, printed at the end
 
     for chain in chains:
-        if writer.is_done(chain["id"]):
+        existing = next((r for r in writer.all() if r.get("id") == chain["id"]), None)
+        existing_filter = (existing or {}).get("filter", {})
+        if existing_filter.get("filter_schema_version") == FILTER_SCHEMA_VERSION:
             continue
 
         hops = chain["hops"]
@@ -134,6 +149,15 @@ def run() -> None:
                 f"expected {n_hops} hop verification entries, "
                 f"got {len(hop_verification)}"
             )
+
+        if not _hop_verification_passes(hop_verification, n_hops):
+            verdict["verdict"] = "fail"
+            verdict["notes"] = (
+                (verdict.get("notes", "") + " " if verdict.get("notes") else "")
+                + "At least one hop is unsupported, mismatched, requires inference, or missing."
+            )
+
+        verdict["filter_schema_version"] = FILTER_SCHEMA_VERSION
 
         record = {**chain, "filter": verdict}
         writer.append(record)

@@ -120,7 +120,8 @@ def run(domains: list, n_per_domain: int = 3) -> None:
 
         for i in range(n_per_domain):
             seed_id = f"seed_{domain_hint.replace(' ', '_')}_{i}"
-            if writer.is_done(seed_id):
+            existing = next((r for r in writer.all() if r.get("id") == seed_id), None)
+            if existing and existing.get("status") == "ok":
                 continue
             target_type = ENTITY_TYPE_ROTATION[i % len(ENTITY_TYPE_ROTATION)]
             record = None
