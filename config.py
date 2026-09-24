@@ -21,7 +21,7 @@ START_DATE = os.environ.get("RECENCY_START_DATE", "2026-01-01")
 END_DATE = os.environ.get("RECENCY_END_DATE", "2026-12-01")
 
 MAX_RELATION_ATTEMPTS_PER_HOP = 8   # step 2: retry different relation types before dead-end
-MAX_BACKTRACKS_PER_CHAIN = 12        # step 2: try alternate B candidates
+MAX_BACKTRACKS_PER_CHAIN = 18        # step 2: try alternate B candidates
 HOP_COUNT = int(os.environ.get("HOP_COUNT", "3"))   # number of hops: 3 means A -> B -> C -> D
 SEARCH_RESULTS_PER_QUERY = 10
 

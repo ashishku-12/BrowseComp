@@ -18,7 +18,7 @@ FILTER_SCHEMA_VERSION = 2
 SYSTEM_PROMPT = """You are an evidence verification agent for a multihop
 question-answering dataset.
 
-Your ONLY job is to verify whether each hop is explicitly supported by the
+Your ONLY job is to verify hop is explicitly supported by the
 provided supporting sentence.
 
 Do NOT use your own world knowledge to fill missing information.
@@ -27,7 +27,7 @@ Do NOT infer a relationship from context.
 Do NOT judge whether an entity is famous unless the supplied evidence directly
 supports that judgment.
 
-For EACH hop, verify:
+For hop, verify:
 
 1. ENTITY MATCH:
    Does the supporting sentence explicitly mention or unambiguously identify
@@ -53,21 +53,13 @@ because its domain looks familiar.
 Return ONLY JSON:
 
 {
-  "verdict": "pass" | "fail",
-  "hop_verification": [
-    {
-      "hop": 1,
-      "entity_match": "yes" | "no",
-      "relation_match": "yes" | "no",
-      "requires_inference": "yes" | "no",
-      "verdict": "supported" | "unsupported",
-      "reason": "<short evidence-based explanation>"
-    }
-  ],
-  "notes": "<short explanation>"
+    "verdict": "supported" | "unsupported",
+    "entity_match": "yes" | "no",
+    "relation_match": "yes" | "no",
+    "requires_inference": "yes" | "no",
+    "reason": "<short evidence-based explanation>"
 }
 
-There must be exactly one hop_verification entry per hop.
 """
 
 
@@ -119,49 +111,46 @@ def run() -> None:
         n_hops = len(hops)
         n_bridges = len(entities) - 2  # everything except the first entity and the final answer
 
-        chain_desc_lines = []
+        hop_verification = []
+
         for i, hop in enumerate(hops):
-            chain_desc_lines.append(
+            chain_desc_line = (
                 f"{entities[i]} --[{hop['relation']}]--> {entities[i+1]}\n"
                 f"  source: {hop['source_url']}\n"
                 f"  sentence: {hop['supporting_sentence']}"
             )
-        user_prompt = (
-            "Verify the following chain using ONLY the supplied supporting sentences.\n"
-            "Do not use outside knowledge.\n\n"
-            + "\n".join(chain_desc_lines)
-        )
-
-        try:
-            verdict = call_local_llm(
-                SYSTEM_PROMPT,
-                user_prompt
+            user_prompt = (
+                "Verify the hop using ONLY the supplied supporting sentences.\n"
+                "Do not use outside knowledge.\n\n"
+                + "\n".join(chain_desc_line)
             )
-        except Exception as e:
-            verdict = {"verdict": "fail", "notes": f"filter agent error: {e}"}
 
-        # Defensive check - flag hop verification array-length mismatches
-        # so they're visible in the data instead of silently trusted
-        hop_verification = verdict.get("hop_verification", [])
+            try:
+                verdict = call_local_llm(
+                    SYSTEM_PROMPT,
+                    user_prompt
+                )
+            except Exception as e:
+                verdict = {"verdict": "unsupported", "notes": f"filter agent error: {e}"}
+
+            hop_verification.append(verdict)
 
         if len(hop_verification) != n_hops:
             verdict["length_mismatch_warning"] = (
                 f"expected {n_hops} hop verification entries, "
                 f"got {len(hop_verification)}"
             )
-
+        verdict = "pass"
+        notes = "All hops are explicitly supported by the provided sentences."
         if not _hop_verification_passes(hop_verification, n_hops):
-            verdict["verdict"] = "fail"
-            verdict["notes"] = (
-                (verdict.get("notes", "") + " " if verdict.get("notes") else "")
-                + "At least one hop is unsupported, mismatched, requires inference, or missing."
-            )
+            verdict = "fail"
+            notes = "At least one hop is unsupported, mismatched, requires inference, or missing."
 
-        verdict["filter_schema_version"] = FILTER_SCHEMA_VERSION
+        filter_schema_version = FILTER_SCHEMA_VERSION
 
-        record = {**chain, "filter": verdict}
+        record = {**chain, "filter": {"verdict" : verdict, "hop_verification" : hop_verification, "notes" : notes, "filter_schema_version" :filter_schema_version}}
         writer.append(record)
-        reason = verdict.get("verdict", "unknown")
+        reason = verdict
         fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
         print(f"[step3] {chain['id']}: {reason}")
 
